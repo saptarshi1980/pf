@@ -7,3 +7,4 @@ plotly
 reportlab
 seaborn
 xlsxwriter
+streamlit-aggrid
