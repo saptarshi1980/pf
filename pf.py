@@ -91,8 +91,8 @@ with st.form("input_form"):
         company_pf_percent = st.number_input("Company PF Contribution (%)", value=12.0, min_value=1.0, max_value=100.0, step=0.1)
         pf_interest_rate = st.number_input("Annual PF Interest Rate (%)", value=8.25, min_value=1.0, max_value=20.0, step=0.25)
         
-        st.subheader("DA Hike Details")
-        da_hike_percent = st.number_input("DA % Hike from 2030", value=4.0, min_value=0.0, max_value=20.0, step=0.5)
+        #st.subheader("DA Hike Details")
+        #da_hike_percent = st.number_input("DA % Hike from 2030", value=4.0, min_value=0.0, max_value=20.0, step=0.5)
 
     calculate_button = st.form_submit_button("Calculate Retirement Corpus")
 
