@@ -1,0 +1,7 @@
+fpdf
+pandas
+matplotlib
+streamlit
+numpy
+plotly
+reportlab
