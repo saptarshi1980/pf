@@ -351,9 +351,8 @@ def create_monthly_projection(dob, current_basic, current_da, current_own_pf, cu
                                                              df.loc[df.index[i], 'EPFO_Outflow_Contribution'] +
                                                              df.loc[df.index[i], 'EPFO_Monthly_Interest'])
 
-        df.loc[df.index[i], 'Total_Corpus'] = (df.loc[df.index[i], 'Own_Closing_Balance'] + 
-                                             df.loc[df.index[i], 'Company_Closing_Balance'] +
-                                             df.loc[df.index[i], 'EPFO_Closing_Balance'])
+        df.loc[df.index[i], 'Total_Corpus'] = df.loc[df.index[i], 'Own_Closing_Balance'] + df.loc[df.index[i], 'Company_Closing_Balance']
+                                             
 
     # Round all values
     numeric_cols = ['Basic', 'DA', 'PF_Pay', 'Own_Contribution', 'Company_Contribution',
