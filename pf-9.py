@@ -146,6 +146,7 @@ with st.form("input_form"):
         
 
     calculate_button = st.form_submit_button("Calculate Retirement Corpus")
+
 def create_monthly_projection(dob, current_basic, current_da, current_own_pf, current_company_pf,
                             increment_month, own_pf_percent, company_pf_percent, pf_interest_rate,
                             pc_2030_factor, pc_2040_factor, promotion_details=[]):
@@ -173,16 +174,12 @@ def create_monthly_projection(dob, current_basic, current_da, current_own_pf, cu
     df['PF_Pay'] = 0.0
     df['Own_Contribution'] = 0.0
     df['Company_Contribution'] = 0.0
-    df['EPFO_Outflow_Contribution'] = 0.0
     df['Own_Opening_Balance'] = 0.0
     df['Own_Monthly_Interest'] = 0.0
     df['Own_Closing_Balance'] = 0.0
     df['Company_Opening_Balance'] = 0.0
     df['Company_Monthly_Interest'] = 0.0
     df['Company_Closing_Balance'] = 0.0
-    df['EPFO_Opening_Balance'] = 0.0
-    df['EPFO_Monthly_Interest'] = 0.0
-    df['EPFO_Closing_Balance'] = 0.0
     df['Total_Corpus'] = 0.0
     df['Event'] = ""
     df['Financial_Year'] = df.index.strftime('%Y') + "-" + (df.index + pd.DateOffset(years=1)).strftime('%y')
@@ -195,75 +192,77 @@ def create_monthly_projection(dob, current_basic, current_da, current_own_pf, cu
     df.loc[df.index[0], 'PF_Pay'] = df.loc[df.index[0], 'Basic'] + df.loc[df.index[0], 'DA']
     df.loc[df.index[0], 'Own_Contribution'] = df.loc[df.index[0], 'PF_Pay'] * (own_pf_percent / 100)
     df.loc[df.index[0], 'Company_Contribution'] = df.loc[df.index[0], 'PF_Pay'] * (company_pf_percent / 100)
-    
-    # Calculate initial EPFO Outflow Contribution
-    pf_pay = df.loc[df.index[0], 'PF_Pay']
-    if pf_pay <= 15000:
-        df.loc[df.index[0], 'EPFO_Outflow_Contribution'] = pf_pay * 0.0833  # 8.33% of PF Pay
-        
-    else:
-        df.loc[df.index[0], 'EPFO_Outflow_Contribution'] = (pf_pay * 0.0833) + ((pf_pay - 15000) * 0.0116) - 1250
-        
 
     monthly_interest_rate = pf_interest_rate / (12 * 100)
+    
+    # Track the current DA percentage
     current_da_percentage = current_da / current_basic if current_basic > 0 else 0
     
     for i in range(len(df)):
         month = df.index[i].month
         year = df.index[i].year
         
-        # Carry forward balances from previous month (except first month)
+        # Carry forward Basic and DA for all months except the first one
         if i > 0:
             df.loc[df.index[i], 'Basic'] = df.loc[df.index[i-1], 'Basic']
             df.loc[df.index[i], 'DA'] = df.loc[df.index[i-1], 'DA']
-            df.loc[df.index[i], 'Own_Opening_Balance'] = df.loc[df.index[i-1], 'Own_Closing_Balance']
-            df.loc[df.index[i], 'Company_Opening_Balance'] = df.loc[df.index[i-1], 'Company_Closing_Balance']
-            df.loc[df.index[i], 'EPFO_Opening_Balance'] = df.loc[df.index[i-1], 'EPFO_Closing_Balance']
 
-        # Check for promotions
+        # Check for promotions first (they override annual increments)
         promotion_applied = False
         for promo in promotion_details:
             if year == promo['year'] and month == promo['month']:
+                # Apply promotion hike
                 old_basic = df.loc[df.index[i], 'Basic']
                 df.loc[df.index[i], 'Basic'] = old_basic * promo['hike_percent']
+                # Recalculate DA based on new basic and existing DA percentage
                 df.loc[df.index[i], 'DA'] = df.loc[df.index[i], 'Basic'] * current_da_percentage
                 df.loc[df.index[i], 'Event'] = f"Promotion: Basic +{int((promo['hike_percent']-1)*100)}%"
                 promotion_applied = True
-                break
+                break  # Only apply one promotion per month
 
-        # Apply annual increment
+        # Apply annual increment (only if no promotion this month AND it's increment month)
         if month == increment_month and not promotion_applied:
             df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} Annual 3% Increment".strip()
             previous_basic = df.loc[df.index[i], 'Basic']
             df.loc[df.index[i], 'Basic'] = previous_basic * 1.03
             
+            # Special handling for first year's increment month
             if year == first_year:
+                # In first year's increment month: DA = existing DA + (existing basic * 0.04)
                 df.loc[df.index[i], 'DA'] = df.loc[df.index[i], 'DA'] + (previous_basic * 0.04)
                 current_da_percentage = df.loc[df.index[i], 'DA'] / df.loc[df.index[i], 'Basic']
             else:
+                # For subsequent years: DA = new Basic * current DA percentage
                 df.loc[df.index[i], 'DA'] = df.loc[df.index[i], 'Basic'] * current_da_percentage
 
-        # Apply DA hikes in January
+        # Apply DA hikes only in January (for all years including first year)
         if month == 1:
             if year < 2030:
+                # For years before 2030, DA increases by 4% of Basic
                 current_da_percentage += 0.04
                 df.loc[df.index[i], 'DA'] = df.loc[df.index[i], 'Basic'] * current_da_percentage
                 df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} Annual DA Revision (4% of Basic)".strip()
             elif year == 2030:
+                # Pay Commission year - DA resets to 0
                 current_da_percentage = 0.0
                 df.loc[df.index[i], 'DA'] = 0
                 df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} Pay Commission 2030, DA Reset".strip()
+                # Apply pay commission multiplication factor and 3 years of increments
                 df.loc[df.index[i], 'Basic'] = df.loc[df.index[i], 'Basic'] * pc_2030_factor * (1.03 ** 3)
             elif 2031 <= year <= 2039:
+                # For years 2031-2039, DA increases by 2% of Basic
                 current_da_percentage += 0.02
                 df.loc[df.index[i], 'DA'] = df.loc[df.index[i], 'Basic'] * current_da_percentage
                 df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} Annual DA Revision (2% of Basic)".strip()
             elif year == 2040:
+                # Pay Commission year - DA resets to 0
                 current_da_percentage = 0.0
                 df.loc[df.index[i], 'DA'] = 0
                 df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} Pay Commission 2040, DA Reset".strip()
+                # Apply pay commission multiplication factor and 3 years of increments
                 df.loc[df.index[i], 'Basic'] = df.loc[df.index[i], 'Basic'] * pc_2040_factor * (1.03 ** 3)
             elif year >= 2041:
+                # For years after 2040, DA increases by 1% of Basic
                 current_da_percentage += 0.01
                 df.loc[df.index[i], 'DA'] = df.loc[df.index[i], 'Basic'] * current_da_percentage
                 df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} Annual DA Revision (1% of Basic)".strip()
@@ -272,49 +271,19 @@ def create_monthly_projection(dob, current_basic, current_da, current_own_pf, cu
         df.loc[df.index[i], 'PF_Pay'] = df.loc[df.index[i], 'Basic'] + df.loc[df.index[i], 'DA']
         df.loc[df.index[i], 'Own_Contribution'] = df.loc[df.index[i], 'PF_Pay'] * (own_pf_percent / 100)
         df.loc[df.index[i], 'Company_Contribution'] = df.loc[df.index[i], 'PF_Pay'] * (company_pf_percent / 100)
-        
-        # Calculate EPFO Outflow Contribution
-        pf_pay = df.loc[df.index[i], 'PF_Pay']
-        if pf_pay <= 15000:
-            df.loc[df.index[i], 'EPFO_Outflow_Contribution'] = pf_pay * 0.0833
-            
-        else:
-            df.loc[df.index[i], 'EPFO_Outflow_Contribution'] = (pf_pay * 0.0833) + ((pf_pay - 15000) * 0.0116) - 1250
-            
 
-        # Calculate interest (special handling for March)
+        # Calculate interest (except for March)
         if month != 3:
             if i > 0:
                 df.loc[df.index[i], 'Own_Monthly_Interest'] = df.loc[df.index[i-1], 'Own_Closing_Balance'] * monthly_interest_rate
                 df.loc[df.index[i], 'Company_Monthly_Interest'] = df.loc[df.index[i-1], 'Company_Closing_Balance'] * monthly_interest_rate
-                df.loc[df.index[i], 'EPFO_Monthly_Interest'] = df.loc[df.index[i-1], 'EPFO_Closing_Balance'] * monthly_interest_rate
         else:
-            # March - calculate interest but don't add to current month's balance
-            if i > 0:
-                march_own_interest = df.loc[df.index[i-1], 'Own_Closing_Balance'] * monthly_interest_rate
-                march_company_interest = df.loc[df.index[i-1], 'Company_Closing_Balance'] * monthly_interest_rate
-                march_epfo_interest = df.loc[df.index[i-1], 'EPFO_Closing_Balance'] * monthly_interest_rate
-                
-                # Show zero interest for March
-                df.loc[df.index[i], 'Own_Monthly_Interest'] = 0
-                df.loc[df.index[i], 'Company_Monthly_Interest'] = 0
-                df.loc[df.index[i], 'EPFO_Monthly_Interest'] = 0
-                
-                # Add March interest to April's opening balance
-                if i+1 < len(df):  # If there is an April
-                    df.loc[df.index[i+1], 'Own_Opening_Balance'] += march_own_interest
-                    df.loc[df.index[i+1], 'Company_Opening_Balance'] += march_company_interest
-                    df.loc[df.index[i+1], 'EPFO_Opening_Balance'] += march_epfo_interest
-                    
-                    # Mark that this includes March interest
-                    if not df.loc[df.index[i+1], 'Event']:
-                        df.loc[df.index[i+1], 'Event'] = "Previous FY Interest Credited"
-                    else:
-                        df.loc[df.index[i+1], 'Event'] = f"{df.loc[df.index[i+1], 'Event']}, Previous FY Interest Credited"
+            # March - no interest as per requirement
+            df.loc[df.index[i], 'Own_Monthly_Interest'] = 0
+            df.loc[df.index[i], 'Company_Monthly_Interest'] = 0
 
         # Calculate closing balances
         if i == 0:
-            # First month calculation
             df.loc[df.index[i], 'Own_Closing_Balance'] = (df.loc[df.index[i], 'Own_Opening_Balance'] +
                                                         df.loc[df.index[i], 'Own_Contribution'] +
                                                         df.loc[df.index[i], 'Own_Monthly_Interest'])
@@ -322,50 +291,28 @@ def create_monthly_projection(dob, current_basic, current_da, current_own_pf, cu
             df.loc[df.index[i], 'Company_Closing_Balance'] = (df.loc[df.index[i], 'Company_Opening_Balance'] +
                                                             df.loc[df.index[i], 'Company_Contribution'] +
                                                             df.loc[df.index[i], 'Company_Monthly_Interest'])
-            
-            df.loc[df.index[i], 'EPFO_Closing_Balance'] = (df.loc[df.index[i], 'EPFO_Opening_Balance'] +
-                                                         df.loc[df.index[i], 'EPFO_Outflow_Contribution'] +
-                                                         df.loc[df.index[i], 'EPFO_Monthly_Interest'])
         else:
-            # For April, the opening balance already includes March interest
-            if month == 4:
-                df.loc[df.index[i], 'Own_Closing_Balance'] = (df.loc[df.index[i], 'Own_Opening_Balance'] +
-                                                            df.loc[df.index[i], 'Own_Contribution'])
-                
-                df.loc[df.index[i], 'Company_Closing_Balance'] = (df.loc[df.index[i], 'Company_Opening_Balance'] +
-                                                                df.loc[df.index[i], 'Company_Contribution'])
-                
-                df.loc[df.index[i], 'EPFO_Closing_Balance'] = (df.loc[df.index[i], 'EPFO_Opening_Balance'] +
-                                                             df.loc[df.index[i], 'EPFO_Outflow_Contribution'])
-            else:
-                # Normal month calculation
-                df.loc[df.index[i], 'Own_Closing_Balance'] = (df.loc[df.index[i], 'Own_Opening_Balance'] +
-                                                            df.loc[df.index[i], 'Own_Contribution'] +
-                                                            df.loc[df.index[i], 'Own_Monthly_Interest'])
-                
-                df.loc[df.index[i], 'Company_Closing_Balance'] = (df.loc[df.index[i], 'Company_Opening_Balance'] +
-                                                                df.loc[df.index[i], 'Company_Contribution'] +
-                                                                df.loc[df.index[i], 'Company_Monthly_Interest'])
-                
-                df.loc[df.index[i], 'EPFO_Closing_Balance'] = (df.loc[df.index[i], 'EPFO_Opening_Balance'] +
-                                                             df.loc[df.index[i], 'EPFO_Outflow_Contribution'] +
-                                                             df.loc[df.index[i], 'EPFO_Monthly_Interest'])
+            df.loc[df.index[i], 'Own_Opening_Balance'] = df.loc[df.index[i-1], 'Own_Closing_Balance']
+            df.loc[df.index[i], 'Company_Opening_Balance'] = df.loc[df.index[i-1], 'Company_Closing_Balance']
 
-        df.loc[df.index[i], 'Total_Corpus'] = (df.loc[df.index[i], 'Own_Closing_Balance'] + 
-                                             df.loc[df.index[i], 'Company_Closing_Balance'] +
-                                             df.loc[df.index[i], 'EPFO_Closing_Balance'])
+            df.loc[df.index[i], 'Own_Closing_Balance'] = (df.loc[df.index[i], 'Own_Opening_Balance'] +
+                                                        df.loc[df.index[i], 'Own_Contribution'] +
+                                                        df.loc[df.index[i], 'Own_Monthly_Interest'])
+
+            df.loc[df.index[i], 'Company_Closing_Balance'] = (df.loc[df.index[i], 'Company_Opening_Balance'] +
+                                                            df.loc[df.index[i], 'Company_Contribution'] +
+                                                            df.loc[df.index[i], 'Company_Monthly_Interest'])
+
+        df.loc[df.index[i], 'Total_Corpus'] = df.loc[df.index[i], 'Own_Closing_Balance'] + df.loc[df.index[i], 'Company_Closing_Balance']
 
     # Round all values
     numeric_cols = ['Basic', 'DA', 'PF_Pay', 'Own_Contribution', 'Company_Contribution',
-                   'EPFO_Outflow_Contribution', 'Own_Opening_Balance', 'Own_Monthly_Interest', 
-                   'Own_Closing_Balance', 'Company_Opening_Balance', 'Company_Monthly_Interest', 
-                   'Company_Closing_Balance', 'EPFO_Opening_Balance', 'EPFO_Monthly_Interest',
-                   'EPFO_Closing_Balance', 'Total_Corpus']
+                    'Own_Opening_Balance', 'Own_Monthly_Interest', 'Own_Closing_Balance',
+                    'Company_Opening_Balance', 'Company_Monthly_Interest', 'Company_Closing_Balance',
+                    'Total_Corpus']
     df[numeric_cols] = df[numeric_cols].round(2)
 
     return df
-
-
 
 def create_downloadable_excel(df):
     """Generate a link to download the dataframe as an Excel file"""
@@ -388,18 +335,11 @@ def create_downloadable_excel(df):
     
     # Add currency format
     money_fmt = workbook.add_format({'num_format': '₹#,##0'})  # Changed to 0 decimal places
-    
-    # Updated list of columns to include EPFO columns
-    money_columns = [
-        'Basic', 'DA', 'PF_Pay', 'Own_Contribution', 'Company_Contribution',
-        'EPFO_Outflow_Contribution', 'Own_Opening_Balance', 'Own_Monthly_Interest', 
-        'Own_Closing_Balance', 'Company_Opening_Balance', 'Company_Monthly_Interest', 
-        'Company_Closing_Balance', 'EPFO_Opening_Balance', 'EPFO_Monthly_Interest',
-        'EPFO_Closing_Balance', 'Total_Corpus'
-    ]
-    
     for col_num, col in enumerate(export_df.columns):
-        if col in money_columns:
+        if col in ['Basic', 'DA', 'PF_Pay', 'Own_Contribution', 'Company_Contribution',
+                  'Own_Opening_Balance', 'Own_Monthly_Interest', 'Own_Closing_Balance',
+                  'Company_Opening_Balance', 'Company_Monthly_Interest', 'Company_Closing_Balance',
+                  'Total_Corpus']:
             worksheet.set_column(col_num, col_num, 18, money_fmt)
     
     writer.close()
@@ -408,6 +348,9 @@ def create_downloadable_excel(df):
     excel_data = output.read()
     b64 = base64.b64encode(excel_data).decode()
     return f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="PF_Projection.xlsx" class="download-button">Download Excel</a>'
+
+
+
 
 
 
@@ -510,51 +453,6 @@ def create_downloadable_pdf(df, dob, final_row):
     pdf_data = buffer.read()
     b64 = base64.b64encode(pdf_data).decode()
     return f'<a href="data:application/pdf;base64,{b64}" download="PF_Retirement_Report.pdf" class="download-button">Download PDF Report</a>'
-
-
-def convert_to_excel(df):
-    """Convert dataframe to Excel with rounding"""
-    # Create a copy of the dataframe to avoid modifying the original
-    export_df = df.copy()
-    
-    # Make sure all EPFO columns are included
-    # If the display columns didn't include EPFO columns, we need to add them back from the original dataframe
-    epfo_columns = ['EPFO_Outflow_Contribution', 'EPFO_Opening_Balance', 'EPFO_Monthly_Interest', 'EPFO_Closing_Balance']
-    for col in epfo_columns:
-        if col not in export_df.columns and col in projection_df.columns:
-            export_df[col] = projection_df[col]
-    
-    # Apply rounding to specific columns
-    columns_to_round = ['Basic', 'DA', 'PF_Pay', 'Own_Contribution', 'Company_Contribution', 'EPFO_Outflow_Contribution']
-    for col in columns_to_round:
-        if col in export_df.columns:
-            export_df[col] = export_df[col].apply(round_up_to_10)
-    
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        export_df.to_excel(writer, index=False, sheet_name='PF_Projection')
-        
-        # Add formatting
-        workbook = writer.book
-        worksheet = writer.sheets['PF_Projection']
-        
-        # Add currency format
-        money_fmt = workbook.add_format({'num_format': '₹#,##0'})  # Changed to 0 decimal places
-        
-        # Include EPFO columns in the formatting
-        money_columns = [
-            'Basic', 'DA', 'PF_Pay', 'Own_Contribution', 'Company_Contribution',
-            'EPFO_Outflow_Contribution', 'Own_Opening_Balance', 'Own_Monthly_Interest', 
-            'Own_Closing_Balance', 'Company_Opening_Balance', 'Company_Monthly_Interest', 
-            'Company_Closing_Balance', 'EPFO_Opening_Balance', 'EPFO_Monthly_Interest',
-            'EPFO_Closing_Balance', 'Total_Corpus'
-        ]
-        
-        for col_num, col in enumerate(export_df.columns):
-            if col in money_columns:
-                worksheet.set_column(col_num, col_num, 18, money_fmt)
-                    
-    return output.getvalue()
 def display_monthly_ledger(projection_df):
     """Display monthly PF ledger with filtering options"""
     st.subheader("Month-wise PF Ledger")
@@ -604,7 +502,7 @@ def display_monthly_ledger(projection_df):
     filtered_df = filtered_df[(filtered_df.index.year >= year_range[0]) & 
                             (filtered_df.index.year <= year_range[1])]
     
-    # Display columns - keep only what's needed for display
+    # Display columns
     display_cols = ['Month_Year', 'Basic', 'DA', 'PF_Pay', 'Own_Contribution',
                   'Company_Contribution', 'Own_Opening_Balance', 'Own_Monthly_Interest',
                   'Own_Closing_Balance', 'Company_Opening_Balance', 'Company_Monthly_Interest',
@@ -651,90 +549,32 @@ def display_monthly_ledger(projection_df):
                         unsafe_allow_html=True
                     )
         
-        # Download button with EPFO columns
+        # Download button
         @st.cache_data
-        def get_excel_data(df):
-            # Create a copy that includes all columns from the original projection_df
-            # This ensures EPFO columns are included in the Excel file
-            full_df = projection_df.copy()
+        def convert_to_excel(df):
+            """Convert dataframe to Excel with rounding"""
+            # Create a copy of the dataframe to avoid modifying the original
+            export_df = df.copy()
             
-            # Filter to match the current view
-            if selected_year != "All Years":
-                full_df = full_df[full_df['Financial_Year'] == selected_year]
-            if event_filter:
-                full_df = full_df[full_df['Event'].str.len() > 0]
-            full_df = full_df[(full_df.index.year >= year_range[0]) & 
-                              (full_df.index.year <= year_range[1])]
+            # Apply rounding to specific columns
+            columns_to_round = ['Basic', 'DA', 'PF_Pay', 'Own_Contribution', 'Company_Contribution']
+            for col in columns_to_round:
+                if col in export_df.columns:
+                    export_df[col] = export_df[col].apply(round_up_to_10)
             
-            # Make sure all columns are included for Excel
-            all_cols = display_cols + ['EPFO_Outflow_Contribution', 'EPFO_Opening_Balance', 
-                                      'EPFO_Monthly_Interest', 'EPFO_Closing_Balance']
-            # Remove duplicates while preserving order
-            all_cols = list(dict.fromkeys(all_cols))
-            
-            # Filter columns that exist in the dataframe
-            excel_cols = [col for col in all_cols if col in full_df.columns]
-            
-            return convert_to_excel(full_df[excel_cols])
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                export_df.to_excel(writer, index=False, sheet_name='PF_Projection')
+            return output.getvalue()
         
         st.download_button(
             label="📥 Download Excel",
-            data=get_excel_data(filtered_df),
+            data=convert_to_excel(filtered_df[display_cols]),
             file_name="PF_Projection.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
     else:
         st.warning("No data matches your filter criteria.")
-
-def create_downloadable_excel(df):
-    """Generate a link to download the dataframe as an Excel file"""
-    # Create a copy of the dataframe to avoid modifying the original
-    export_df = df.copy()
-    
-    # Make sure all EPFO columns are included
-    epfo_columns = ['EPFO_Outflow_Contribution', 'EPFO_Opening_Balance', 'EPFO_Monthly_Interest', 'EPFO_Closing_Balance']
-    for col in epfo_columns:
-        if col not in export_df.columns and col in df.columns:
-            export_df[col] = df[col]
-    
-    # Apply rounding to specific columns
-    columns_to_round = ['Basic', 'DA', 'PF_Pay', 'Own_Contribution', 'Company_Contribution', 'EPFO_Outflow_Contribution']
-    for col in columns_to_round:
-        if col in export_df.columns:
-            export_df[col] = export_df[col].apply(round_up_to_10)
-    
-    output = io.BytesIO()
-    writer = pd.ExcelWriter(output, engine='xlsxwriter')
-    export_df.to_excel(writer, sheet_name='PF_Projection', index=False)
-    
-    # Add formatting
-    workbook = writer.book
-    worksheet = writer.sheets['PF_Projection']
-    
-    # Add currency format
-    money_fmt = workbook.add_format({'num_format': '₹#,##0'})  # Changed to 0 decimal places
-    
-    # Updated list of columns to include EPFO columns
-    money_columns = [
-        'Basic', 'DA', 'PF_Pay', 'Own_Contribution', 'Company_Contribution',
-        'EPFO_Outflow_Contribution', 'Own_Opening_Balance', 'Own_Monthly_Interest', 
-        'Own_Closing_Balance', 'Company_Opening_Balance', 'Company_Monthly_Interest', 
-        'Company_Closing_Balance', 'EPFO_Opening_Balance', 'EPFO_Monthly_Interest',
-        'EPFO_Closing_Balance', 'Total_Corpus'
-    ]
-    
-    for col_num, col in enumerate(export_df.columns):
-        if col in money_columns:
-            worksheet.set_column(col_num, col_num, 18, money_fmt)
-    
-    writer.close()
-    
-    output.seek(0)
-    excel_data = output.read()
-    b64 = base64.b64encode(excel_data).decode()
-    return f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="PF_Projection.xlsx" class="download-button">Download Excel</a>'
-
-
 
 def display_yearly_summary(projection_df):
     """Display yearly summary of PF growth"""
