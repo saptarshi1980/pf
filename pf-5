@@ -8,7 +8,6 @@ import io
 from matplotlib import pyplot as plt
 import seaborn as sns
 from st_aggrid import AgGrid, GridOptionsBuilder
-import math
 
 # Initialize page config
 st.set_page_config(page_title="Retirement Corpus Calculator", layout="wide")
@@ -48,9 +47,6 @@ This application calculates your projected PF corpus at retirement based on:
 - Annual increments and DA increases
 - Pay commission revisions in 2030 and 2040
 """)
-
-def round_up_to_10(value):
-    return math.ceil(value / 10) * 10
 
 def calculate_age_and_retirement_date(dob):
     today = date.today()
@@ -99,51 +95,6 @@ with st.form("input_form"):
         st.subheader("Pay commission Multiplying Factor")
         pc_2030_factor = st.number_input("2030 Pay Commission Factor", value=1.86)
         pc_2040_factor = st.number_input("2040 Pay Commission Factor", value=1.4)
-        st.subheader("Promotion Details")
-    
-        # Calculate maximum possible promotion year (retirement year - 1)
-        retirement_year = dob.year + 60
-        max_promo_year = retirement_year - 1
-        
-        num_promotions = st.number_input("Number of expected promotions before retirement", 
-                                    min_value=0, max_value=10, value=2)
-        
-        promotion_details = []
-        for i in range(num_promotions):
-            with st.expander(f"Promotion {i+1} Details"):
-                # Default year spreads promotions evenly between current year and retirement
-                default_year = date.today().year + int((retirement_year - date.today().year) * (i+1)/(num_promotions+1))
-                
-                promo_year = st.number_input(
-                    f"Year of Promotion {i+1}", 
-                    min_value=date.today().year, 
-                    max_value=max_promo_year,
-                    value=min(default_year, max_promo_year)
-                )
-                
-                promo_month = st.selectbox(
-                    f"Month of Promotion {i+1}", 
-                    options=list(range(1,13)),
-                    format_func=lambda x: calendar.month_name[x]
-                )
-                
-                promo_hike = st.number_input(
-                    f"Basic Pay Hike (%) for Promotion {i+1}", 
-                    min_value=5.0, 
-                    max_value=30.0, 
-                    value=10.0, 
-                    step=0.5
-                )
-                
-                promotion_details.append({
-                    'year': promo_year,
-                    'month': promo_month,
-                    'hike_percent': promo_hike/100 + 1  # Convert to multiplication factor
-                })
-
-                
-        
-        
 
     calculate_button = st.form_submit_button("Calculate Retirement Corpus")
 
@@ -314,26 +265,17 @@ def create_monthly_projection(dob, current_basic, current_da, current_own_pf, cu
 
 def create_downloadable_excel(df):
     """Generate a link to download the dataframe as an Excel file"""
-    # Create a copy of the dataframe to avoid modifying the original
-    export_df = df.copy()
-    
-    # Apply rounding to specific columns
-    columns_to_round = ['Basic', 'DA', 'PF_Pay', 'Own_Contribution', 'Company_Contribution']
-    for col in columns_to_round:
-        if col in export_df.columns:
-            export_df[col] = export_df[col].apply(round_up_to_10)
-    
     output = io.BytesIO()
     writer = pd.ExcelWriter(output, engine='xlsxwriter')
-    export_df.to_excel(writer, sheet_name='PF_Projection', index=False)
+    df.to_excel(writer, sheet_name='PF_Projection', index=False)
     
     # Add formatting
     workbook = writer.book
     worksheet = writer.sheets['PF_Projection']
     
     # Add currency format
-    money_fmt = workbook.add_format({'num_format': '₹#,##0'})  # Changed to 0 decimal places
-    for col_num, col in enumerate(export_df.columns):
+    money_fmt = workbook.add_format({'num_format': '₹#,##0.00'})
+    for col_num, col in enumerate(df.columns):
         if col in ['Basic', 'DA', 'PF_Pay', 'Own_Contribution', 'Company_Contribution',
                   'Own_Opening_Balance', 'Own_Monthly_Interest', 'Own_Closing_Balance',
                   'Company_Opening_Balance', 'Company_Monthly_Interest', 'Company_Closing_Balance',
@@ -346,12 +288,6 @@ def create_downloadable_excel(df):
     excel_data = output.read()
     b64 = base64.b64encode(excel_data).decode()
     return f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="PF_Projection.xlsx" class="download-button">Download Excel</a>'
-
-
-
-
-
-
 
 def create_downloadable_pdf(df, dob, final_row):
     """Generate a PDF report of the retirement projection"""
@@ -550,19 +486,9 @@ def display_monthly_ledger(projection_df):
         # Download button
         @st.cache_data
         def convert_to_excel(df):
-            """Convert dataframe to Excel with rounding"""
-            # Create a copy of the dataframe to avoid modifying the original
-            export_df = df.copy()
-            
-            # Apply rounding to specific columns
-            columns_to_round = ['Basic', 'DA', 'PF_Pay', 'Own_Contribution', 'Company_Contribution']
-            for col in columns_to_round:
-                if col in export_df.columns:
-                    export_df[col] = export_df[col].apply(round_up_to_10)
-            
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                export_df.to_excel(writer, index=False, sheet_name='PF_Projection')
+                df.to_excel(writer, index=False, sheet_name='PF_Projection')
             return output.getvalue()
         
         st.download_button(
@@ -724,7 +650,30 @@ def display_summary_metrics(projection_df, dob):
         st.metric("Total Company Contributions", f"₹{total_company_contribution:,.2f}")
         st.metric("Total Interest Earned (Company)", f"₹{total_company_interest:,.2f}")
         st.metric("Interest-to-Contribution Ratio (Company)", f"{total_company_interest/total_company_contribution:.2f}")
-        
+        st.subheader("Promotion Details")
+    
+        num_promotions = st.number_input("Number of expected promotions before retirement", 
+                                   min_value=0, max_value=10, value=2)
+    
+        promotion_details = []
+        for i in range(num_promotions):
+            with st.expander(f"Promotion {i+1} Details"):
+                promo_year = st.number_input(f"Year of Promotion {i+1}", 
+                                        min_value=date.today().year, 
+                                        max_value=dob.year+59,  # Max year before retirement
+                                        value=date.today().year + (i+1)*10)
+                promo_month = st.selectbox(f"Month of Promotion {i+1}", 
+                                        options=list(range(1,13)), 
+                                        format_func=lambda x: calendar.month_name[x])
+                promo_hike = st.number_input(f"Basic Pay Hike (%) for Promotion {i+1}", 
+                                        min_value=5.0, max_value=30.0, 
+                                        value=10.0, step=0.5)
+                promotion_details.append({
+                    'year': promo_year,
+                    'month': promo_month,
+                    'hike_percent': promo_hike/100 + 1  # Convert to multiplication factor
+                })
+    
     # Show key events
     st.subheader("Key Financial Events")
     
@@ -766,9 +715,7 @@ if calculate_button:
             own_pf_percent=own_pf_percent,
             company_pf_percent=company_pf_percent,
             pf_interest_rate=pf_interest_rate,
-            promotion_details=promotion_details,
-            pc_2030_factor=pc_2030_factor,
-            pc_2040_factor=pc_2040_factor
+            #da_hike_percent=da_hike_percent
         )
         
         if projection_df is not None:
