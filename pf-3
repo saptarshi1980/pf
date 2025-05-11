@@ -1,0 +1,291 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+from datetime import datetime, date, timedelta
+import calendar
+import base64
+from io import BytesIO
+import matplotlib.pyplot as plt
+from reportlab.lib.pagesizes import letter, landscape
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+import io
+
+# Initialize page config
+st.set_page_config(page_title="Retirement Corpus Calculator", layout="wide")
+
+# Main title and description
+st.title("PF Retirement Corpus Value Calculator")
+st.markdown("""
+This application calculates your projected PF corpus at retirement based on:
+- Your current age and retirement age (60 years)
+- Current PF pay, contribution rates, and corpus balance
+- Annual increments and DA increases
+- Pay commission revisions in 2030 and 2040
+""")
+
+def calculate_age_and_retirement_date(dob):
+    today = date.today()
+    retirement_age = 60
+    retirement_date = date(dob.year + retirement_age, dob.month, dob.day)
+    
+    if retirement_date < today:
+        return None, None
+    
+    current_age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    return current_age, retirement_date
+
+# Initialize session state
+if 'calculated' not in st.session_state:
+    st.session_state.calculated = False
+if 'projection_df' not in st.session_state:
+    st.session_state.projection_df = None
+
+# Input form
+with st.form("input_form"):
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Personal Information")
+        dob = st.date_input("Date of Birth", value=date(1980, 1, 1), 
+                          min_value=date(1950, 1, 1), max_value=date(2000, 1, 1))
+        
+        st.subheader("Current Salary Details")
+        current_basic = st.number_input("Current Basic Pay (₹)", value=80000, min_value=1000, step=1000)
+        current_da = st.number_input("Current DA (₹)", value=30000, min_value=0, step=1000)
+        
+        st.subheader("Current PF Corpus")
+        current_own_pf = st.number_input("Current PF Corpus (Own Side) (₹)", value=2148242, min_value=0, step=10000)
+        current_company_pf = st.number_input("Current PF Corpus (Company Side) (₹)", value=1637688, min_value=0, step=10000)
+        
+    with col2:
+        st.subheader("Increment Details")
+        increment_month = st.selectbox("Annual Increment Month", options=list(range(1, 13)), 
+                                     format_func=lambda x: calendar.month_name[x], index=6)
+        
+        st.subheader("Contribution & Interest Rates")
+        own_pf_percent = st.number_input("Own PF Contribution (%)", value=12.0, min_value=1.0, max_value=100.0, step=0.1)
+        company_pf_percent = st.number_input("Company PF Contribution (%)", value=12.0, min_value=1.0, max_value=100.0, step=0.1)
+        pf_interest_rate = st.number_input("Annual PF Interest Rate (%)", value=8.25, min_value=1.0, max_value=20.0, step=0.25)
+        
+        st.subheader("DA Hike Details")
+        da_hike_percent = st.number_input("DA % Hike from 2030", value=4.0, min_value=0.0, max_value=20.0, step=0.5)
+
+    calculate_button = st.form_submit_button("Calculate Retirement Corpus")
+
+def create_monthly_projection(dob, current_basic, current_da, current_own_pf, current_company_pf,
+                            increment_month, own_pf_percent, company_pf_percent, pf_interest_rate,
+                            da_hike_percent):
+    # Calculate retirement date
+    current_age, retirement_date = calculate_age_and_retirement_date(dob)
+    if not retirement_date:
+        st.error("Retirement date is in the past. Please check your date of birth.")
+        return None
+    
+    # Start from the current month
+    current_date = date.today().replace(day=1)
+    end_date = retirement_date.replace(day=1)
+    
+    # Initialize dataframe
+    date_range = pd.date_range(start=current_date, end=end_date, freq='MS')
+    df = pd.DataFrame(index=date_range)
+    
+    # Initialize columns
+    df['Month_Year'] = df.index.strftime('%b-%Y')
+    df['Basic'] = current_basic
+    df['DA'] = current_da
+    df['PF_Pay'] = df['Basic'] + df['DA']
+    df['Own_Contribution'] = df['PF_Pay'] * (own_pf_percent / 100)
+    df['Company_Contribution'] = df['PF_Pay'] * (company_pf_percent / 100)
+    df['Own_Opening_Balance'] = 0.0
+    df['Own_Monthly_Interest'] = 0.0
+    df['Own_Closing_Balance'] = 0.0
+    df['Company_Opening_Balance'] = 0.0
+    df['Company_Monthly_Interest'] = 0.0
+    df['Company_Closing_Balance'] = 0.0
+    df['Total_Corpus'] = 0.0
+    df['Event'] = ""
+    
+    # Set initial values
+    df.loc[df.index[0], 'Own_Opening_Balance'] = current_own_pf
+    df.loc[df.index[0], 'Company_Opening_Balance'] = current_company_pf
+
+    monthly_interest_rate = pf_interest_rate / (12 * 100)
+    
+    # Iterate through each month
+    for i in range(len(df)):
+        month = df.index[i].month
+        year = df.index[i].year
+        
+        # Calculate interest (except for March)
+        if month != 3 and i > 0:
+            df.loc[df.index[i], 'Own_Monthly_Interest'] = df.loc[df.index[i-1], 'Own_Closing_Balance'] * monthly_interest_rate
+            df.loc[df.index[i], 'Company_Monthly_Interest'] = df.loc[df.index[i-1], 'Company_Closing_Balance'] * monthly_interest_rate
+        
+        # Calculate closing balances
+        if i == 0:
+            df.loc[df.index[i], 'Own_Closing_Balance'] = (df.loc[df.index[i], 'Own_Opening_Balance'] + 
+                                                     df.loc[df.index[i], 'Own_Contribution'] + 
+                                                     df.loc[df.index[i], 'Own_Monthly_Interest'])
+            
+            df.loc[df.index[i], 'Company_Closing_Balance'] = (df.loc[df.index[i], 'Company_Opening_Balance'] + 
+                                                         df.loc[df.index[i], 'Company_Contribution'] + 
+                                                         df.loc[df.index[i], 'Company_Monthly_Interest'])
+        else:
+            df.loc[df.index[i], 'Own_Opening_Balance'] = df.loc[df.index[i-1], 'Own_Closing_Balance']
+            df.loc[df.index[i], 'Company_Opening_Balance'] = df.loc[df.index[i-1], 'Company_Closing_Balance']
+            
+            df.loc[df.index[i], 'Own_Closing_Balance'] = (df.loc[df.index[i], 'Own_Opening_Balance'] + 
+                                                     df.loc[df.index[i], 'Own_Contribution'] + 
+                                                     df.loc[df.index[i], 'Own_Monthly_Interest'])
+            
+            df.loc[df.index[i], 'Company_Closing_Balance'] = (df.loc[df.index[i], 'Company_Opening_Balance'] + 
+                                                         df.loc[df.index[i], 'Company_Contribution'] + 
+                                                         df.loc[df.index[i], 'Company_Monthly_Interest'])
+        
+        df.loc[df.index[i], 'Total_Corpus'] = df.loc[df.index[i], 'Own_Closing_Balance'] + df.loc[df.index[i], 'Company_Closing_Balance']
+        
+        # Apply annual increment
+        if month == increment_month and i > 0:
+            df.loc[df.index[i], 'Event'] = "Annual 3% Increment"
+            new_basic = df.loc[df.index[i], 'Basic'] * 1.03
+            df.loc[df.index[i]:, 'Basic'] = new_basic
+            df.loc[df.index[i]:, 'PF_Pay'] = df['Basic'] + df['DA']
+            df.loc[df.index[i]:, 'Own_Contribution'] = df['PF_Pay'] * (own_pf_percent / 100)
+            df.loc[df.index[i]:, 'Company_Contribution'] = df['PF_Pay'] * (company_pf_percent / 100)
+        
+        # Apply DA hikes and pay commissions
+        if month == 1:
+            if year == 2030:
+                df.loc[df.index[i], 'Event'] = "Pay Commission 2030"
+                new_basic = df.loc[df.index[i], 'Basic'] * 1.86 * (1.03 ** 3)
+                df.loc[df.index[i]:, 'Basic'] = new_basic
+                df.loc[df.index[i]:, 'DA'] = 0
+                df.loc[df.index[i]:, 'PF_Pay'] = df['Basic'] + df['DA']
+                df.loc[df.index[i]:, 'Own_Contribution'] = df['PF_Pay'] * (own_pf_percent / 100)
+                df.loc[df.index[i]:, 'Company_Contribution'] = df['PF_Pay'] * (company_pf_percent / 100)
+            elif year == 2040:
+                df.loc[df.index[i], 'Event'] = "Pay Commission 2040"
+                new_basic = df.loc[df.index[i], 'Basic'] * 1.4 * (1.03 ** 3)
+                df.loc[df.index[i]:, 'Basic'] = new_basic
+                df.loc[df.index[i]:, 'DA'] = 0
+                df.loc[df.index[i]:, 'PF_Pay'] = df['Basic'] + df['DA']
+                df.loc[df.index[i]:, 'Own_Contribution'] = df['PF_Pay'] * (own_pf_percent / 100)
+                df.loc[df.index[i]:, 'Company_Contribution'] = df['PF_Pay'] * (company_pf_percent / 100)
+            elif 2031 <= year <= 2039:
+                df.loc[df.index[i], 'Event'] = "DA Hike 2%"
+                new_da = df.loc[df.index[i], 'DA'] * 1.02
+                df.loc[df.index[i]:, 'DA'] = new_da
+                df.loc[df.index[i]:, 'PF_Pay'] = df['Basic'] + df['DA']
+                df.loc[df.index[i]:, 'Own_Contribution'] = df['PF_Pay'] * (own_pf_percent / 100)
+                df.loc[df.index[i]:, 'Company_Contribution'] = df['PF_Pay'] * (company_pf_percent / 100)
+            elif year >= 2041:
+                df.loc[df.index[i], 'Event'] = "DA Hike 1%"
+                new_da = df.loc[df.index[i], 'DA'] * 1.01
+                df.loc[df.index[i]:, 'DA'] = new_da
+                df.loc[df.index[i]:, 'PF_Pay'] = df['Basic'] + df['DA']
+                df.loc[df.index[i]:, 'Own_Contribution'] = df['PF_Pay'] * (own_pf_percent / 100)
+                df.loc[df.index[i]:, 'Company_Contribution'] = df['PF_Pay'] * (company_pf_percent / 100)
+    
+    # Round all values
+    numeric_cols = ['Basic', 'DA', 'PF_Pay', 'Own_Contribution', 'Company_Contribution',
+                   'Own_Opening_Balance', 'Own_Monthly_Interest', 'Own_Closing_Balance',
+                   'Company_Opening_Balance', 'Company_Monthly_Interest', 'Company_Closing_Balance',
+                   'Total_Corpus']
+    df[numeric_cols] = df[numeric_cols].round(2)
+    
+    return df
+
+def display_results(projection_df):
+    st.subheader("Month-wise PF Projection")
+    
+    # Create expandable sections for each year
+    years = sorted(list(set(projection_df.index.year)))
+    
+    for year in years:
+        with st.expander(f"Year: {year}", expanded=(year == years[0])):
+            year_data = projection_df[projection_df.index.year == year]
+            
+            # Format the display columns
+            display_cols = ['Month_Year', 'Basic', 'DA', 'PF_Pay', 'Own_Contribution',
+                          'Company_Contribution', 'Own_Opening_Balance', 'Own_Monthly_Interest',
+                          'Own_Closing_Balance', 'Company_Opening_Balance', 'Company_Monthly_Interest',
+                          'Company_Closing_Balance', 'Total_Corpus', 'Event']
+            
+            # Format the dataframe for display
+            display_df = year_data[display_cols].copy()
+            display_df.columns = [col.replace('_', ' ') for col in display_cols]
+            
+            # Apply currency formatting
+            currency_cols = ['Basic', 'DA', 'PF Pay', 'Own Contribution', 'Company Contribution',
+                           'Own Opening Balance', 'Own Monthly Interest', 'Own Closing Balance',
+                           'Company Opening Balance', 'Company Monthly Interest', 'Company Closing Balance',
+                           'Total Corpus']
+            
+            styled_df = display_df.style.format({
+                col: '₹{:,.2f}' for col in currency_cols
+            })
+            
+            st.dataframe(styled_df, height=min(600, 50 + 35 * len(year_data)))
+            
+            # Show key events for this year
+            events = year_data[year_data['Event'] != '']
+            if not events.empty:
+                st.write("**Key Events:**")
+                for date_idx, row in events.iterrows():
+                    st.write(f"- {row['Month_Year']}: {row['Event']}")
+
+# When form is submitted
+if calculate_button:
+    with st.spinner('Calculating your retirement corpus...'):
+        projection_df = create_monthly_projection(
+            dob=dob,
+            current_basic=current_basic,
+            current_da=current_da,
+            current_own_pf=current_own_pf,
+            current_company_pf=current_company_pf,
+            increment_month=increment_month,
+            own_pf_percent=own_pf_percent,
+            company_pf_percent=company_pf_percent,
+            pf_interest_rate=pf_interest_rate,
+            da_hike_percent=da_hike_percent
+        )
+        
+        if projection_df is not None:
+            st.session_state.projection_df = projection_df
+            st.session_state.calculated = True
+
+# Display results if calculation is done
+if st.session_state.get('calculated', False) and st.session_state.projection_df is not None:
+    display_results(st.session_state.projection_df)
+    
+    # Show summary information
+    final_row = st.session_state.projection_df.iloc[-1]
+    retirement_date = date(dob.year + 60, dob.month, dob.day)
+    
+    st.success(f"Projection calculated until retirement in {retirement_date.strftime('%B %Y')}")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Final Own PF Balance", f"₹{final_row['Own_Closing_Balance']:,.2f}")
+    with col2:
+        st.metric("Final Company PF Balance", f"₹{final_row['Company_Closing_Balance']:,.2f}")
+    with col3:
+        st.metric("Total Retirement Corpus", f"₹{final_row['Total_Corpus']:,.2f}")
+    
+    # Show key events and changes
+    st.subheader("Key Financial Events")
+    
+    # Find and display pay commission impacts
+    pc_events = st.session_state.projection_df[st.session_state.projection_df['Event'].str.contains('Pay Commission')]
+    
+    for idx, row in pc_events.iterrows():
+        prev_month = idx - pd.DateOffset(months=1)
+        if prev_month in st.session_state.projection_df.index:
+            prev_pf_pay = st.session_state.projection_df.loc[prev_month, 'PF_Pay']
+            change_pct = ((row['PF_Pay'] - prev_pf_pay) / prev_pf_pay) * 100
+            st.write(f"**{row['Month_Year']} - {row['Event']}**")
+            st.write(f"- PF Pay changed from ₹{prev_pf_pay:,.2f} to ₹{row['PF_Pay']:,.2f} ({change_pct:.1f}% increase)")
+            st.write(f"- Basic pay changed from ₹{st.session_state.projection_df.loc[prev_month, 'Basic']:,.2f} to ₹{row['Basic']:,.2f}")
+            st.write("")

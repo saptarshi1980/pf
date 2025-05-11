@@ -97,29 +97,29 @@ with st.form("input_form"):
     calculate_button = st.form_submit_button("Calculate Retirement Corpus")
 
 def create_monthly_projection(dob, current_basic, current_da, current_own_pf, current_company_pf,
-                            increment_month, own_pf_percent, company_pf_percent, pf_interest_rate):
+                            increment_month, own_pf_percent, company_pf_percent, pf_interest_rate,
+                            da_hike_percent):
     # Calculate retirement date
     current_age, retirement_date = calculate_age_and_retirement_date(dob)
     if not retirement_date:
         st.error("Retirement date is in the past. Please check your date of birth.")
         return None
-
+    
     # Start from the current month
     current_date = date.today().replace(day=1)
     end_date = retirement_date.replace(day=1)
-    first_year = current_date.year
-
+    
     # Initialize dataframe
     date_range = pd.date_range(start=current_date, end=end_date, freq='MS')
     df = pd.DataFrame(index=date_range)
-
+    
     # Initialize columns
     df['Month_Year'] = df.index.strftime('%b-%Y')
-    df['Basic'] = 0.0
-    df['DA'] = 0.0
-    df['PF_Pay'] = 0.0
-    df['Own_Contribution'] = 0.0
-    df['Company_Contribution'] = 0.0
+    df['Basic'] = current_basic
+    df['DA'] = current_da
+    df['PF_Pay'] = df['Basic'] + df['DA']
+    df['Own_Contribution'] = df['PF_Pay'] * (own_pf_percent / 100)
+    df['Company_Contribution'] = df['PF_Pay'] * (company_pf_percent / 100)
     df['Own_Opening_Balance'] = 0.0
     df['Own_Monthly_Interest'] = 0.0
     df['Own_Closing_Balance'] = 0.0
@@ -129,82 +129,18 @@ def create_monthly_projection(dob, current_basic, current_da, current_own_pf, cu
     df['Total_Corpus'] = 0.0
     df['Event'] = ""
     df['Financial_Year'] = df.index.strftime('%Y') + "-" + (df.index + pd.DateOffset(years=1)).strftime('%y')
-
+    
     # Set initial values
-    df.loc[df.index[0], 'Basic'] = current_basic
-    df.loc[df.index[0], 'DA'] = current_da
     df.loc[df.index[0], 'Own_Opening_Balance'] = current_own_pf
     df.loc[df.index[0], 'Company_Opening_Balance'] = current_company_pf
-    df.loc[df.index[0], 'PF_Pay'] = df.loc[df.index[0], 'Basic'] + df.loc[df.index[0], 'DA']
-    df.loc[df.index[0], 'Own_Contribution'] = df.loc[df.index[0], 'PF_Pay'] * (own_pf_percent / 100)
-    df.loc[df.index[0], 'Company_Contribution'] = df.loc[df.index[0], 'PF_Pay'] * (company_pf_percent / 100)
 
     monthly_interest_rate = pf_interest_rate / (12 * 100)
     
-    # Track the current DA percentage
-    current_da_percentage = current_da / current_basic if current_basic > 0 else 0
-    
+    # Iterate through each month
     for i in range(len(df)):
         month = df.index[i].month
         year = df.index[i].year
-
-        # Carry forward Basic and DA for all months except the first one
-        if i > 0:
-            df.loc[df.index[i], 'Basic'] = df.loc[df.index[i-1], 'Basic']
-            df.loc[df.index[i], 'DA'] = df.loc[df.index[i-1], 'DA']
-
-        # Apply annual increment
-        if month == increment_month:
-            df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} Annual 3% Increment".strip()
-            previous_basic = df.loc[df.index[i], 'Basic']
-            df.loc[df.index[i], 'Basic'] = previous_basic * 1.03
-            
-            # Special handling for first year's increment month
-            if year == first_year:
-                # In first year's increment month: DA = existing DA + (existing basic * 0.04)
-                df.loc[df.index[i], 'DA'] = df.loc[df.index[i], 'DA'] + (previous_basic * 0.04)
-                current_da_percentage = df.loc[df.index[i], 'DA'] / df.loc[df.index[i], 'Basic']
-            else:
-                # For subsequent years: DA = new Basic * current DA percentage
-                df.loc[df.index[i], 'DA'] = df.loc[df.index[i], 'Basic'] * current_da_percentage
-
-        # Apply DA hikes only in January (for all years including first year)
-        if month == 1:
-            if year < 2030:
-                # For years before 2030, DA increases by 4% of Basic
-                current_da_percentage += 0.04
-                df.loc[df.index[i], 'DA'] = df.loc[df.index[i], 'Basic'] * current_da_percentage
-                df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} Annual DA Revision (4% of Basic)".strip()
-            elif year == 2030:
-                # Pay Commission year - DA resets to 0
-                current_da_percentage = 0.0
-                df.loc[df.index[i], 'DA'] = 0
-                df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} Pay Commission 2030, DA Reset".strip()
-                # Apply pay commission multiplication factor and 3 years of increments
-                df.loc[df.index[i], 'Basic'] = df.loc[df.index[i], 'Basic'] * 1.86 * (1.03 ** 3)
-            elif 2031 <= year <= 2039:
-                # For years 2031-2039, DA increases by 2% of Basic
-                current_da_percentage += 0.02
-                df.loc[df.index[i], 'DA'] = df.loc[df.index[i], 'Basic'] * current_da_percentage
-                df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} Annual DA Revision (2% of Basic)".strip()
-            elif year == 2040:
-                # Pay Commission year - DA resets to 0
-                current_da_percentage = 0.0
-                df.loc[df.index[i], 'DA'] = 0
-                df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} Pay Commission 2040, DA Reset".strip()
-                # Apply pay commission multiplication factor and 3 years of increments
-                df.loc[df.index[i], 'Basic'] = df.loc[df.index[i], 'Basic'] * 1.4 * (1.03 ** 3)
-            elif year >= 2041:
-                # For years after 2040, DA increases by 1% of Basic
-                current_da_percentage += 0.01
-                df.loc[df.index[i], 'DA'] = df.loc[df.index[i], 'Basic'] * current_da_percentage
-                df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} Annual DA Revision (1% of Basic)".strip()
-
-        # Calculate PF Pay and contributions
-        df.loc[df.index[i], 'PF_Pay'] = df.loc[df.index[i], 'Basic'] + df.loc[df.index[i], 'DA']
-        df.loc[df.index[i], 'Own_Contribution'] = df.loc[df.index[i], 'PF_Pay'] * (own_pf_percent / 100)
-        df.loc[df.index[i], 'Company_Contribution'] = df.loc[df.index[i], 'PF_Pay'] * (company_pf_percent / 100)
-
+        
         # Calculate interest (except for March)
         if month != 3:
             if i > 0:
@@ -214,37 +150,79 @@ def create_monthly_projection(dob, current_basic, current_da, current_own_pf, cu
             # March - no interest as per requirement
             df.loc[df.index[i], 'Own_Monthly_Interest'] = 0
             df.loc[df.index[i], 'Company_Monthly_Interest'] = 0
-
+        
         # Calculate closing balances
         if i == 0:
-            df.loc[df.index[i], 'Own_Closing_Balance'] = (df.loc[df.index[i], 'Own_Opening_Balance'] +
-                                                        df.loc[df.index[i], 'Own_Contribution'] +
-                                                        df.loc[df.index[i], 'Own_Monthly_Interest'])
-
-            df.loc[df.index[i], 'Company_Closing_Balance'] = (df.loc[df.index[i], 'Company_Opening_Balance'] +
-                                                            df.loc[df.index[i], 'Company_Contribution'] +
-                                                            df.loc[df.index[i], 'Company_Monthly_Interest'])
+            df.loc[df.index[i], 'Own_Closing_Balance'] = (df.loc[df.index[i], 'Own_Opening_Balance'] + 
+                                                     df.loc[df.index[i], 'Own_Contribution'] + 
+                                                     df.loc[df.index[i], 'Own_Monthly_Interest'])
+            
+            df.loc[df.index[i], 'Company_Closing_Balance'] = (df.loc[df.index[i], 'Company_Opening_Balance'] + 
+                                                         df.loc[df.index[i], 'Company_Contribution'] + 
+                                                         df.loc[df.index[i], 'Company_Monthly_Interest'])
         else:
             df.loc[df.index[i], 'Own_Opening_Balance'] = df.loc[df.index[i-1], 'Own_Closing_Balance']
             df.loc[df.index[i], 'Company_Opening_Balance'] = df.loc[df.index[i-1], 'Company_Closing_Balance']
-
-            df.loc[df.index[i], 'Own_Closing_Balance'] = (df.loc[df.index[i], 'Own_Opening_Balance'] +
-                                                        df.loc[df.index[i], 'Own_Contribution'] +
-                                                        df.loc[df.index[i], 'Own_Monthly_Interest'])
-
-            df.loc[df.index[i], 'Company_Closing_Balance'] = (df.loc[df.index[i], 'Company_Opening_Balance'] +
-                                                            df.loc[df.index[i], 'Company_Contribution'] +
-                                                            df.loc[df.index[i], 'Company_Monthly_Interest'])
-
+            
+            df.loc[df.index[i], 'Own_Closing_Balance'] = (df.loc[df.index[i], 'Own_Opening_Balance'] + 
+                                                     df.loc[df.index[i], 'Own_Contribution'] + 
+                                                     df.loc[df.index[i], 'Own_Monthly_Interest'])
+            
+            df.loc[df.index[i], 'Company_Closing_Balance'] = (df.loc[df.index[i], 'Company_Opening_Balance'] + 
+                                                         df.loc[df.index[i], 'Company_Contribution'] + 
+                                                         df.loc[df.index[i], 'Company_Monthly_Interest'])
+        
         df.loc[df.index[i], 'Total_Corpus'] = df.loc[df.index[i], 'Own_Closing_Balance'] + df.loc[df.index[i], 'Company_Closing_Balance']
-
+        
+        # Apply annual increment
+        if month == increment_month:
+            df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} Annual 3% Increment".strip()
+            new_basic = df.loc[df.index[i], 'Basic'] * 1.03
+            df.loc[df.index[i]:, 'Basic'] = new_basic
+            df.loc[df.index[i]:, 'PF_Pay'] = df.loc[df.index[i]:, 'Basic'] + df.loc[df.index[i]:, 'DA']
+            df.loc[df.index[i]:, 'Own_Contribution'] = df.loc[df.index[i]:, 'PF_Pay'] * (own_pf_percent / 100)
+            df.loc[df.index[i]:, 'Company_Contribution'] = df.loc[df.index[i]:, 'PF_Pay'] * (company_pf_percent / 100)
+        
+        # Apply DA hikes and pay commissions
+        if month == 1:
+            if year == 2030:
+                df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} Pay Commission 2030".strip()
+                new_basic = df.loc[df.index[i], 'Basic'] * 1.86 * (1.03 ** 3)
+                df.loc[df.index[i]:, 'Basic'] = new_basic
+                df.loc[df.index[i]:, 'DA'] = 0
+                df.loc[df.index[i]:, 'PF_Pay'] = df.loc[df.index[i]:, 'Basic'] + df.loc[df.index[i]:, 'DA']
+                df.loc[df.index[i]:, 'Own_Contribution'] = df.loc[df.index[i]:, 'PF_Pay'] * (own_pf_percent / 100)
+                df.loc[df.index[i]:, 'Company_Contribution'] = df.loc[df.index[i]:, 'PF_Pay'] * (company_pf_percent / 100)
+            elif year == 2040:
+                df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} Pay Commission 2040".strip()
+                new_basic = df.loc[df.index[i], 'Basic'] * 1.4 * (1.03 ** 3)
+                df.loc[df.index[i]:, 'Basic'] = new_basic
+                df.loc[df.index[i]:, 'DA'] = 0
+                df.loc[df.index[i]:, 'PF_Pay'] = df.loc[df.index[i]:, 'Basic'] + df.loc[df.index[i]:, 'DA']
+                df.loc[df.index[i]:, 'Own_Contribution'] = df.loc[df.index[i]:, 'PF_Pay'] * (own_pf_percent / 100)
+                df.loc[df.index[i]:, 'Company_Contribution'] = df.loc[df.index[i]:, 'PF_Pay'] * (company_pf_percent / 100)
+            elif 2031 <= year <= 2039:
+                df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} DA Hike 2%".strip()
+                new_da = df.loc[df.index[i], 'DA'] + (df.loc[df.index[i], 'Basic'] * 0.02)
+                df.loc[df.index[i]:, 'DA'] = new_da
+                df.loc[df.index[i]:, 'PF_Pay'] = df.loc[df.index[i]:, 'Basic'] + df.loc[df.index[i]:, 'DA']
+                df.loc[df.index[i]:, 'Own_Contribution'] = df.loc[df.index[i]:, 'PF_Pay'] * (own_pf_percent / 100)
+                df.loc[df.index[i]:, 'Company_Contribution'] = df.loc[df.index[i]:, 'PF_Pay'] * (company_pf_percent / 100)
+            elif year >= 2041:
+                df.loc[df.index[i], 'Event'] = f"{df.loc[df.index[i], 'Event']} DA Hike 1%".strip()
+                new_da = df.loc[df.index[i], 'DA'] + (df.loc[df.index[i], 'Basic'] * 0.01)
+                df.loc[df.index[i]:, 'DA'] = new_da
+                df.loc[df.index[i]:, 'PF_Pay'] = df.loc[df.index[i]:, 'Basic'] + df.loc[df.index[i]:, 'DA']
+                df.loc[df.index[i]:, 'Own_Contribution'] = df.loc[df.index[i]:, 'PF_Pay'] * (own_pf_percent / 100)
+                df.loc[df.index[i]:, 'Company_Contribution'] = df.loc[df.index[i]:, 'PF_Pay'] * (company_pf_percent / 100)
+    
     # Round all values
     numeric_cols = ['Basic', 'DA', 'PF_Pay', 'Own_Contribution', 'Company_Contribution',
-                    'Own_Opening_Balance', 'Own_Monthly_Interest', 'Own_Closing_Balance',
-                    'Company_Opening_Balance', 'Company_Monthly_Interest', 'Company_Closing_Balance',
-                    'Total_Corpus']
+                   'Own_Opening_Balance', 'Own_Monthly_Interest', 'Own_Closing_Balance',
+                   'Company_Opening_Balance', 'Company_Monthly_Interest', 'Company_Closing_Balance',
+                   'Total_Corpus']
     df[numeric_cols] = df[numeric_cols].round(2)
-
+    
     return df
 
 def create_downloadable_excel(df):
@@ -433,24 +411,7 @@ def display_monthly_ledger(projection_df):
         st.dataframe(styled_df, height=400)
         
         # Download buttons
-        def df_to_excel_bytes(df):
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df.to_excel(writer, index=False, sheet_name='PF_Projection')
-            return output.getvalue()
-        
-        st.download_button(
-        label="📥 Download Excel",
-        data=df_to_excel_bytes(filtered_df[display_cols]),  # You'll need this helper function
-        file_name="PF_Projection.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-# Add this helper function:
-        
-        
-        
-        
+        st.markdown(create_downloadable_excel(filtered_df[display_cols]), unsafe_allow_html=True)
     else:
         st.warning("No data matches your filter criteria.")
 
@@ -501,10 +462,11 @@ def display_yearly_summary(projection_df):
         ax.legend()
         ax.grid(True)
         
+        # Format y-axis to show in lakhs/crores
         def format_amount(x, pos):
-            if x >= 10000000:
+            if x >= 10000000:  # More than 1 crore
                 return f'₹{x/10000000:.2f}Cr'
-            elif x >= 100000:
+            elif x >= 100000:  # More than 1 lakh
                 return f'₹{x/100000:.2f}L'
             else:
                 return f'₹{x:.0f}'
@@ -542,12 +504,12 @@ def display_yearly_summary(projection_df):
         fig, ax = plt.subplots(figsize=(10, 6))
         sns.lineplot(x=yearly_df.index, y=yearly_df['PF_Pay'], marker='o', linewidth=2)
         
-        # Annotate key events - safely handle None values
-        events_df = projection_df[projection_df['Event'].notna() & projection_df['Event'].str.contains('Pay Commission|DA Hike', na=False)]
+        # Annotate key events
+        events_df = projection_df[projection_df['Event'].str.contains('Pay Commission|DA Hike')]
         events_df = events_df.resample('Y').first()  # Take first event of each year
         
         for idx, row in events_df.iterrows():
-            if row['Event'] and 'Pay Commission' in row['Event']:
+            if 'Pay Commission' in row['Event']:
                 ax.annotate(row['Event'], 
                            xy=(idx, row['PF_Pay']),
                            xytext=(15, 15),
@@ -562,6 +524,7 @@ def display_yearly_summary(projection_df):
         ax.grid(True)
         
         st.pyplot(fig)
+
 def display_summary_metrics(projection_df, dob):
     """Display summary metrics and retirement projection"""
     final_row = projection_df.iloc[-1]
@@ -646,7 +609,7 @@ if calculate_button:
             own_pf_percent=own_pf_percent,
             company_pf_percent=company_pf_percent,
             pf_interest_rate=pf_interest_rate,
-            #da_hike_percent=da_hike_percent
+            da_hike_percent=da_hike_percent
         )
         
         if projection_df is not None:
