@@ -85,7 +85,6 @@ with st.form("input_form"):
         st.subheader("Current PF Corpus")
         current_own_pf = st.number_input("Current PF Corpus (Own Side) (₹)", value=2148242, min_value=0, step=10000)
         current_company_pf = st.number_input("Current PF Corpus (Company Side) (₹)", value=1637688, min_value=0, step=10000)
-        current_epfo_balance = st.number_input("Current EPFO Demand Amt (₹)", value=0, min_value=0, step=10000)
         
     with col2:
         st.subheader("Increment Details")
@@ -149,7 +148,7 @@ with st.form("input_form"):
     calculate_button = st.form_submit_button("Calculate Retirement Corpus")
 def create_monthly_projection(dob, current_basic, current_da, current_own_pf, current_company_pf,
                             increment_month, own_pf_percent, company_pf_percent, pf_interest_rate,
-                            pc_2030_factor, pc_2040_factor, current_epfo_balance,promotion_details=[]):
+                            pc_2030_factor, pc_2040_factor, promotion_details=[]):
     """Calculate monthly PF projection with promotions, increments, and pay commissions"""
     
     # Calculate retirement date
@@ -196,7 +195,7 @@ def create_monthly_projection(dob, current_basic, current_da, current_own_pf, cu
     df.loc[df.index[0], 'PF_Pay'] = df.loc[df.index[0], 'Basic'] + df.loc[df.index[0], 'DA']
     df.loc[df.index[0], 'Own_Contribution'] = df.loc[df.index[0], 'PF_Pay'] * (own_pf_percent / 100)
     df.loc[df.index[0], 'Company_Contribution'] = df.loc[df.index[0], 'PF_Pay'] * (company_pf_percent / 100)
-    df.loc[df.index[0], 'EPFO_Opening_Balance'] = current_epfo_balance
+    
     # Calculate initial EPFO Outflow Contribution
     pf_pay = df.loc[df.index[0], 'PF_Pay']
     if pf_pay <= 15000:
@@ -930,8 +929,7 @@ if calculate_button:
             pf_interest_rate=pf_interest_rate,
             promotion_details=promotion_details,
             pc_2030_factor=pc_2030_factor,
-            pc_2040_factor=pc_2040_factor,
-            current_epfo_balance=current_epfo_balance
+            pc_2040_factor=pc_2040_factor
         )
         
         if projection_df is not None:
