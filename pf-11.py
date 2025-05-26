@@ -9,7 +9,6 @@ from matplotlib import pyplot as plt
 import seaborn as sns
 from st_aggrid import AgGrid, GridOptionsBuilder
 import math
-from dateutil.relativedelta import relativedelta
 
 # Initialize page config
 st.set_page_config(page_title="Retirement Corpus Calculator", layout="wide")
@@ -87,13 +86,7 @@ with st.form("input_form"):
         current_own_pf = st.number_input("Current PF Corpus (Own Side) (₹)", value=2148242, min_value=0, step=10000)
         current_company_pf = st.number_input("Current PF Corpus (Company Side) (₹)", value=1637688, min_value=0, step=10000)
         current_epfo_balance = st.number_input("Current EPFO Demand Amt (₹)", value=0, min_value=0, step=10000)
-        st.subheader("EPFO Higher Pension Calculation")
-        highest_pf_pay_aug2014 = st.number_input("Highest PF Pay till August 2014 (₹)", 
-                                           value=0, min_value=0, step=1000)
-        date_of_joining = st.date_input("Date of Joining", 
-                                  value=date(2000, 1, 1), 
-                                  min_value=date(1950, 1, 1), 
-                                  max_value=date(2014, 8, 31))
+        
     with col2:
         st.subheader("Increment Details")
         increment_month = st.selectbox("Annual Increment Month", options=list(range(1, 13)), 
@@ -742,80 +735,6 @@ def create_downloadable_excel(df):
     return f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="PF_Projection.xlsx" class="download-button">Download Excel</a>'
 
 
-def calculate_epfo_pension(dob, date_of_joining, highest_pf_pay_aug2014, projection_df):
-    """
-    Calculate EPFO higher pension based on the formula:
-    [(Service Days + 2 bonus years if service >20yrs) × Highest PF Pay Till August 2014) + 
-     (Days After August 2014 × Average monthly PF Pay of last 60 months till age 58)] 
-     / (70 × 365)
-    """
-    # Calculate key dates
-    age_58_date = dob + relativedelta(years=58)
-    # Make sure we go to the end of the month for age 58
-    age_58_date = age_58_date.replace(day=1) + relativedelta(months=1) - relativedelta(days=1)
-    
-    aug_2014_end = date(2014, 8, 31)
-    sep_2014_start = date(2014, 9, 1)
-    
-    # --- Calculate Total Service Years (from joining to retirement at 58) ---
-    total_service_days = (age_58_date - date_of_joining).days
-    total_service_years = total_service_days / 365.25  # Accurate year count including leap years
-    print(f"Total service years from joining to age 58: {total_service_years:.2f}")
-    
-    # Determine if bonus years are applicable (>20 years total service)
-    bonus_days = 730 if total_service_years > 20 else 0
-    is_bonus_applied = bonus_days > 0
-    
-    # --- First Component: Service Days (with bonus) × Highest PF Pay ---
-    # Service days only till August 2014 for this component
-    service_days_till_aug2014 = (aug_2014_end - date_of_joining).days
-    print(f"Service days till Aug 2014: {service_days_till_aug2014}")
-    
-    # Add bonus days to service days for component 1 calculation
-    adjusted_service_days = service_days_till_aug2014 + bonus_days
-    print(f"Adjusted service days (with bonus): {adjusted_service_days}")
-    
-    component1 = adjusted_service_days * highest_pf_pay_aug2014
-    
-    # --- Second Component: Days After Aug 2014 × Last 60 Months Avg PF Pay ---
-    # Get exact 60-month window (Age 53 to 58)
-    last_60_months_start = age_58_date - relativedelta(months=60)
-    last_60_months_df = projection_df[
-        (projection_df.index >= pd.to_datetime(last_60_months_start)) & 
-        (projection_df.index <= pd.to_datetime(age_58_date))
-    ]
-    
-    # Validate we have full 60 months of data
-    if len(last_60_months_df) < 60:
-        missing_months = 60 - len(last_60_months_df)
-        st.warning(f"Missing {missing_months} months of data for 60-month average (need until {age_58_date.strftime('%d-%b-%Y')})")
-        return None
-    
-    avg_pf_pay = last_60_months_df['PF_Pay'].mean()
-    days_after_aug2014 = (age_58_date - sep_2014_start).days
-    print("Days after 2014-",days_after_aug2014)
-    component2 = days_after_aug2014 * avg_pf_pay
-    
-    # --- Final Calculation ---
-    monthly_pension = (component1 + component2) / (70 * 365)
-    
-    return {
-        'service_days': service_days_till_aug2014,  # Service days till Aug 2014
-        'bonus_days_added': bonus_days,
-        'adjusted_service_days': adjusted_service_days,
-        'highest_pf_pay': highest_pf_pay_aug2014,
-        'component1': component1,
-        'days_after_aug2014': days_after_aug2014,
-        'avg_pf_pay_last_60_months': avg_pf_pay,
-        'component2': component2,
-        'monthly_pension': monthly_pension,
-        'age_58_date': age_58_date,
-        'last_60_months_start': last_60_months_start,
-        'total_service_years': total_service_years,  # Total service from joining to age 58
-        'is_bonus_applied': is_bonus_applied
-    }   
-    
-    
 
 def display_yearly_summary(projection_df):
     """Display yearly summary of PF growth"""
@@ -925,150 +844,7 @@ def display_yearly_summary(projection_df):
         ax.grid(True)
         
         st.pyplot(fig)
-
 def display_summary_metrics(projection_df, dob):
-    if hasattr(st.session_state, 'date_of_joining') and hasattr(st.session_state, 'highest_pf_pay_aug2014'):
-        if st.session_state.highest_pf_pay_aug2014 > 0:
-            pension_result = calculate_epfo_pension(
-                dob=dob,
-                date_of_joining=st.session_state.date_of_joining,
-                highest_pf_pay_aug2014=st.session_state.highest_pf_pay_aug2014,
-                projection_df=projection_df
-            )
-            
-            if pension_result:
-                st.subheader("EPFO Higher Pension Calculation")
-                
-                # Create columns for better layout
-                col1, col2 = st.columns([1, 1])
-                
-                with col1:
-                    st.markdown("### 1. Service Period Calculation")
-                    st.metric("Service Days", f"{pension_result['service_days']:,} days")
-                    st.metric("Bonus Days", f"{pension_result['bonus_days_added']:,} days")
-                    st.metric("Highest PF Pay", f"₹{pension_result['highest_pf_pay']:,.2f}")
-                    st.metric("Component Value", f"₹{pension_result['component1']:,.2f}")
-                
-                with col2:
-                    st.markdown("### 2. Salary Average Calculation")
-                    st.metric("Days After Aug 2014", f"{pension_result['days_after_aug2014']:,} days")
-                    st.metric("60-Month Avg PF Pay", f"₹{pension_result['avg_pf_pay_last_60_months']:,.2f}")
-                    st.metric("Component Value", f"₹{pension_result['component2']:,.2f}")
-                
-                # Final calculation
-                st.markdown("---")
-                st.markdown("### Final Calculation")
-                st.markdown(f"""
-                **Formula:** (₹{pension_result['component1']:,.2f} + ₹{pension_result['component2']:,.2f}) ÷ (70 × 365)
-                """)
-                
-                # Get the final EPFO closing balance from the projection dataframe
-                final_epfo_balance = projection_df.iloc[-1]['EPFO_Closing_Balance']
-                
-                # Display monthly pension and EPFO balance in a prominent layout
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown(
-                        f"""
-                        <div style="
-                            background: linear-gradient(135deg, #28a745, #20c997);
-                            padding: 20px;
-                            border-radius: 15px;
-                            text-align: center;
-                            margin: 10px 0;
-                            box-shadow: 0 8px 16px rgba(0,0,0,0.1);
-                            border: 2px solid #ffffff;
-                        ">
-                            <h2 style="
-                                color: white;
-                                font-size: 2.5rem;
-                                font-weight: bold;
-                                margin: 0;
-                                text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-                            ">
-                                ₹{pension_result['monthly_pension']:,.2f}
-                            </h2>
-                            <h4 style="
-                                color: white;
-                                font-size: 1.2rem;
-                                margin: 10px 0 0 0;
-                                font-weight: 600;
-                            ">
-                                Monthly Pension
-                            </h4>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-                
-                with col2:
-                    st.markdown(
-                        f"""
-                        <div style="
-                            background: linear-gradient(135deg, #1E88E5, #0D47A1);
-                            padding: 20px;
-                            border-radius: 15px;
-                            text-align: center;
-                            margin: 10px 0;
-                            box-shadow: 0 8px 16px rgba(0,0,0,0.1);
-                            border: 2px solid #ffffff;
-                        ">
-                            <h2 style="
-                                color: white;
-                                font-size: 2.5rem;
-                                font-weight: bold;
-                                margin: 0;
-                                text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-                            ">
-                                ₹{final_epfo_balance:.2f}
-                            </h2>
-                            <h4 style="
-                                color: white;
-                                font-size: 1.2rem;
-                                margin: 10px 0 0 0;
-                                font-weight: 600;
-                            ">
-                                EPFO - Total outflow
-                            </h4>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-                
-                # Service period info
-                st.info(f"""
-                **Service Period:** {st.session_state.date_of_joining.strftime('%d-%b-%Y')} to 31-Aug-2014
-                **60-Month Average:** {pension_result['last_60_months_start'].strftime('%d-%b-%Y')} to {pension_result['age_58_date'].strftime('%d-%b-%Y')}
-                """)
-
-
-
-
-
-    
-    # Display summary metrics and retirement projection
-    final_row = projection_df.iloc[-1]
-    retirement_date = date(dob.year + 60, dob.month, dob.day)
-    
-    st.markdown("---")
-    st.subheader("Retirement Projection Summary")
-    st.write("Based on your current data and the applied assumptions, your projected retirement details are:")
-    
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        st.metric("Date of Birth", dob.strftime('%d-%b-%Y'))
-    with col2:
-        st.metric("Expected Retirement Date", retirement_date.strftime('%d-%b-%Y'))
-
-    
-    
-    
-    
-    
-    
-    
-    
     """Display summary metrics and retirement projection"""
     final_row = projection_df.iloc[-1]
     retirement_date = date(dob.year + 60, dob.month, dob.day)
@@ -1081,14 +857,6 @@ def display_summary_metrics(projection_df, dob):
         <p><strong>Expected Retirement Date:</strong> {retirement_date.strftime('%d-%b-%Y')}</p>
     </div>
     """, unsafe_allow_html=True)
-    
-    
-    
-    
-    
-    
-    
-    
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -1150,9 +918,6 @@ def display_summary_metrics(projection_df, dob):
 # When form is submitted
 if calculate_button:
     with st.spinner('Calculating your retirement corpus...'):
-        
-        st.session_state.date_of_joining = date_of_joining
-        st.session_state.highest_pf_pay_aug2014 = highest_pf_pay_aug2014
         projection_df = create_monthly_projection(
             dob=dob,
             current_basic=current_basic,
